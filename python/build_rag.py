@@ -32,7 +32,7 @@ BATCH_SIZE = 32  # Tune for speed/memory
 
 def get_document_paths(corpus_dir: str) -> List[str]:
     """Return a list of document file paths in the corpus directory."""
-    exts = ['.docx', '.md', '.pdf', '.txt']
+    exts = ['.docx', '.md', '.pdf', '.txt', '.html']
     files = []
     for root, _, filenames in os.walk(corpus_dir):
         for fname in filenames:

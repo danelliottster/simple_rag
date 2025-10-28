@@ -19,6 +19,14 @@ import logging
 BATCH_SIZE = 32  # TODO: Tune for speed/memory
 
 def batch_embed_chunks(chunks, client):
+    """
+    Embed chunks in batches using the provided GenAI client.
+    Args:
+        chunks: List of chunk dictionaries with 'chunk' key storing the text to embed.
+        client: GenAI client
+    Returns:
+        List of chunk dictionaries with added 'embedding' key.
+    """
     embeddings = []
     texts = [c['chunk'] for c in chunks]
     # Google GenAI batch embedding API
