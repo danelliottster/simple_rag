@@ -137,11 +137,11 @@ class RagSqliteDB:
             A list of dicts with keys: id, source_file, chunk_index, tags
         """
         c = self.conn.cursor()
-        sql = 'SELECT id, source_file, chunk_index, embedding, tags FROM chunks'
+        sql = 'SELECT id, source_file, chunk_index, embedding, tags, chunk_text FROM chunks'
         rows = c.execute(sql).fetchall()
         self.chunks = []
         for row in rows:
-            _id, source_file, chunk_index, embedding_blob, tags = row
+            _id, source_file, chunk_index, embedding_blob, tags, chunk_text = row
             emb = None
             if embedding_blob is not None:
                 try:
@@ -158,6 +158,7 @@ class RagSqliteDB:
                 'chunk_index': chunk_index,
                 'embedding': emb,
                 'tags': tags,
+                'chunk_text': chunk_text
             })
 
     def build_nn_index(self) -> None:
