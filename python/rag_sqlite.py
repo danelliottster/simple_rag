@@ -25,6 +25,96 @@ class RagSqliteDB:
         self.chunks = []  # placeholder for loaded chunks
         self.modelled_chunk_idxs = []  # placeholder for chunks with valid embeddings
 
+    def create_conversation(self, username: str) -> int:
+        """
+        Create a new conversation for the given username with empty conversation history and summary.
+        Returns the new conversation's id.
+        """
+        import datetime
+        c = self.conn.cursor()
+        # START create empty conversation JSON and timestamps
+        empty_conversation = json.dumps([])
+        now = datetime.datetime.now().isoformat()
+        # END create empty conversation JSON and timestamps
+        ###################################################
+        # START insert new conversation row
+        c.execute('''
+            INSERT INTO conversations (username, conversation, conversation_summary, start_datetime, last_modified_datetime)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (username, empty_conversation, '', now, now))
+        self.conn.commit()
+        # END insert new conversation row
+        ###################################################
+        return c.lastrowid
+
+    def load_conversation(self, conversation_id: int) -> list:
+        """
+        Load the conversation history for a given conversation ID.
+        Returns the conversation history as a list.
+        """
+        c = self.conn.cursor()
+        # START query conversation history by id
+        row = c.execute('''
+            SELECT conversation FROM conversations WHERE id = ?
+        ''', (conversation_id,)).fetchone()
+        # END query conversation history by id
+        ###################################################
+        if row:
+            return json.loads(row[0])
+        return []
+
+    def update_conversation(self, conversation_id: int, conversation: list) -> None:
+        """
+        Update the conversation history and last modified datetime for a given conversation ID.
+        Args:
+            conversation_id: The ID of the conversation to update.
+            conversation: The conversation history as a list (will be stored as JSON).
+        Returns:
+            None
+        """
+        import datetime
+        c = self.conn.cursor()
+        # START serialize conversation and get current time
+        conversation_json = json.dumps(conversation)
+        now = datetime.datetime.now().isoformat()
+        # END serialize conversation and get current time
+        ###################################################
+        # START update conversation row (do not update summary)
+        c.execute('''
+            UPDATE conversations
+            SET conversation = ?, last_modified_datetime = ?
+            WHERE id = ?
+        ''', (conversation_json, now, conversation_id))
+        self.conn.commit()
+        # END update conversation row
+        ###################################################
+
+    def get_conversations_for_user(self, username: str) -> dict:
+        """
+        Load all conversations for a user.
+        Returns a JSON string with id, summary, and last modified date.
+        """
+        c = self.conn.cursor()
+        # START query conversations for user
+        rows = c.execute('''
+            SELECT id, conversation_summary, last_modified_datetime
+            FROM conversations
+            WHERE username = ?
+        ''', (username,)).fetchall()
+        # END query conversations for user
+        ###################################################
+        # START build result list
+        result = []
+        for row in rows:
+            result.append({
+                'id': row[0],
+                'conversation_summary': row[1],
+                'last_modified_datetime': row[2]
+            })
+        # END build result list
+        ###################################################
+        return result
+
     def upsert_chunks(self, embedded_chunks):
         """
         Upsert embedded chunks into the DB.  Update or insert file metadata as needed.
