@@ -1,0 +1,17 @@
+# Default configuration for simple_rag
+# You can override these values with environment variables or by editing this file.
+api_key_file: "../google_api_key.txt"
+db_path: "../hugo.db"
+# tags: []
+model_pkl_name: "model.pkl"
+llm_models:
+  light: "gemini-2.5-flash"
+  heavy: "gemini-2.5-pro"
+instructions: |
+  You are a helpful AI assistant that provides answers based on the provided context.
+  Use the context to answer the question as accurately as possible.
+  If the context does not contain the answer, respond with "I don't know."
+  Always cite the source of your information using [source: SOURCE_NAME] format in the text of your response.
+  Put a list of citations at the end of your answer.
+  Do not fabricate information.
+max_context_tokens: 20000

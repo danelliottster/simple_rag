@@ -1,24 +1,34 @@
-import argparse, os
-import rag_sqlite, embed_chunks, llm
+import os, argparse
+import rag_sqlite, embed_chunks, llm, config
 from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 
-parser = argparse.ArgumentParser(description="Build RAG chunks from a corpus directory.")
-parser.add_argument('--api_key_file', type=str, required=True, help='Path to text file containing Google API key')
-parser.add_argument('--db_path', type=str, required=True, help='Path to sqlite database to store chunks and metadata')
-parser.add_argument('--tags', nargs='*', default=[], help='Tags to filter chunks and documents')
+parser = argparse.ArgumentParser(description="Run RAG-based QA interactive loop.")
+parser.add_argument(
+    "--config",
+    type=str,
+    default=None,
+    help="Path to config YAML file.",
+)
 args = parser.parse_args()
+config.Config.instance(args.config)
 
-rag_db = rag_sqlite.RagSqliteDB(db_path=args.db_path)
+# Load app config (singleton).
+cfg = config.get_config()
+api_key_file = cfg.get('api_key_file')
+db_path = cfg.get('db_path')
+tags = cfg.get('tags', []) or []
+
+rag_db = rag_sqlite.RagSqliteDB(db_path=db_path)
 # get the path to the db directory
-db_dir = os.path.dirname(args.db_path)
+db_dir = os.path.dirname(db_path)
 # load the "vector DB"
 rag_db.load_index_file(db_dir+"/model.pkl")
 
 ###############################################
 # START put together LLM interfaces
-with open(args.api_key_file, 'r') as f:
+with open(api_key_file, 'r') as f:
     api_key = f.read().strip()
 client = genai.Client(api_key=api_key)
 
@@ -64,14 +74,18 @@ while True:
     relevant_chunks = rag_db.search_chunks(
         embedding=prompt_embedding,
         top_k=20,
-        tags=args.tags
+        tags=tags
     )
     # END search vector DB for relevant chunks
     #########################################################
 
     #########################################################
     # START build context from retrieved chunks
-    context = "\n\n".join([chunk['chunk_text'] for chunk in relevant_chunks])
+    # context = "\n\n".join([chunk['chunk_text'] for chunk in relevant_chunks])
+    context = llm.build_context(
+        chunks=relevant_chunks,
+        max_tokens=cfg.get('max_context_tokens', 20000)
+    )
     # END build context from retrieved chunks
     #########################################################
 
@@ -94,6 +108,7 @@ while True:
     response = llm.send_to_llm(
         prompt=full_prompt,
         context=context,
+        instructions=cfg.get('instructions'),
         model=model_light
     )
     # END send prompt + context to LLM and get response

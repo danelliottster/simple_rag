@@ -9,16 +9,13 @@ from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 import argparse
+from simple_rag.python.config import get_config
 
-
-parser = argparse.ArgumentParser(description="Streamlit RAG QA App")
-parser.add_argument("--api_key_file", type=str, default="/path/to/api_key.txt", help="Google API Key File")
-parser.add_argument("--db_path", type=str, default="/path/to/rag.db", help="SQLite DB Path")
-parser.add_argument("--tags", nargs="*", default=[], help="Tags (comma separated)")
-args = parser.parse_args()
-
-api_key_file = args.api_key_file
-db_path = args.db_path
+# instantiate config singleton and use it as defaults when CLI args are not provided
+cfg = get_config()
+api_key_file = cfg.get('api_key_file')
+db_path = cfg.get('db_path')
+tags = cfg.get('tags', []) or []
 
 # --- Load DB and LLMs once ---
 @st.cache_resource(show_spinner=True)
@@ -68,7 +65,7 @@ if prompt := st.chat_input("What is up?"):
     relevant_chunks = rag_db.search_chunks(
         embedding=prompt_embedding,
         top_k=20,
-        tags=args.tags
+        tags=tags
     )
     # END search vector DB for relevant chunks
     #########################################################
