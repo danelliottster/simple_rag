@@ -1,5 +1,5 @@
 # Default configuration for simple_rag
-# You can override these values with environment variables or by editing this file.
+password: "your_password_here"
 api_key_file: "../google_api_key.txt"
 db_path: "../hugo.db"
 # tags: []
@@ -15,3 +15,4 @@ instructions: |
   Put a list of citations at the end of your answer.
   Do not fabricate information.
 max_context_tokens: 20000
+max_context_documents: 20

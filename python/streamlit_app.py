@@ -4,18 +4,51 @@ Loads the database and vector index once, then allows interactive queries.
 """
 import streamlit as st
 import os
-import rag_sqlite, embed_chunks, llm
+import rag_sqlite, embed_chunks, llm, config
 from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 import argparse
-from simple_rag.python.config import get_config
+
+DEFAULT_MAX_CONTEXT_TOKENS = 20000
 
 # instantiate config singleton and use it as defaults when CLI args are not provided
-cfg = get_config()
+parser = argparse.ArgumentParser(description="Run RAG-based QA interactive loop.")
+parser.add_argument(
+    "--config",
+    type=str,
+    default=None,
+    help="Path to config YAML file.",
+)
+args = parser.parse_args()
+config.Config.instance(args.config)
+cfg = config.get_config()
 api_key_file = cfg.get('api_key_file')
 db_path = cfg.get('db_path')
 tags = cfg.get('tags', []) or []
+
+# --- Password gating: require user to enter password if config defines one ---
+password_required = cfg.get('password')  # None if not set
+
+# Initialize auth state
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if password_required and not st.session_state.authenticated:
+    # Simple login form; stops execution until correct password entered
+    with st.form("login_form"):
+        entered = st.text_input("Enter password to continue", type="password")
+        submitted = st.form_submit_button("Login")
+        if submitted:
+            if entered == password_required:
+                st.session_state.authenticated = True
+                st.success("Authenticated.")
+                # pause for a moment to let user see success message
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    # Prevent the rest of the app from rendering until authenticated
+    st.stop()
 
 # --- Load DB and LLMs once ---
 @st.cache_resource(show_spinner=True)
@@ -64,7 +97,7 @@ if prompt := st.chat_input("What is up?"):
     # START search vector DB for relevant chunks
     relevant_chunks = rag_db.search_chunks(
         embedding=prompt_embedding,
-        top_k=20,
+        top_k=cfg.get('max_context_documents', 20),
         tags=tags
     )
     # END search vector DB for relevant chunks
@@ -72,7 +105,10 @@ if prompt := st.chat_input("What is up?"):
 
     #########################################################
     # START build context from retrieved chunks
-    context = "\n\n".join([chunk['chunk_text'] for chunk in relevant_chunks])
+    context = llm.build_context(
+        chunks=relevant_chunks,
+        max_tokens=cfg.get('max_context_tokens', DEFAULT_MAX_CONTEXT_TOKENS)
+    )
     # END build context from retrieved chunks
     #########################################################
 
@@ -94,6 +130,7 @@ if prompt := st.chat_input("What is up?"):
     response = llm.send_to_llm(
         prompt=full_prompt,
         context=context,
+        instructions=cfg.get('instructions', ''),
         model=model_light
     )
     # END send prompt + context to LLM and get response

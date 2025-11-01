@@ -4,6 +4,8 @@ from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 
+DEFAULT_MAX_CONTEXT_TOKENS = 20000
+
 parser = argparse.ArgumentParser(description="Run RAG-based QA interactive loop.")
 parser.add_argument(
     "--config",
@@ -84,7 +86,7 @@ while True:
     # context = "\n\n".join([chunk['chunk_text'] for chunk in relevant_chunks])
     context = llm.build_context(
         chunks=relevant_chunks,
-        max_tokens=cfg.get('max_context_tokens', 20000)
+        max_tokens=cfg.get('max_context_tokens', DEFAULT_MAX_CONTEXT_TOKENS)
     )
     # END build context from retrieved chunks
     #########################################################
