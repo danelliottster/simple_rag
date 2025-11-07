@@ -54,14 +54,39 @@ class RagSqliteDB:
         """
         c = self.conn.cursor()
         # START query conversation history by id
+        # include deleted flag so we can respect soft-deletes
         row = c.execute('''
-            SELECT conversation FROM conversations WHERE id = ?
+            SELECT conversation, deleted FROM conversations WHERE id = ?
         ''', (conversation_id,)).fetchone()
         # END query conversation history by id
         ###################################################
         if row:
-            return json.loads(row[0])
+            conversation_json, deleted = row
+            # respect soft-delete: return None when conversation is marked deleted
+            if deleted:
+                return None
+            return json.loads(conversation_json)
         return []
+
+    def update_summary(self, conversation_id: int, summary: str) -> None:
+        """
+        Update only the conversation summary for a given conversation ID.
+        Args:
+            conversation_id: The ID of the conversation to update.
+            summary: The new summary string.
+        Returns:
+            None
+        """
+        c = self.conn.cursor()
+        # START update conversation summary
+        c.execute('''
+            UPDATE conversations
+            SET conversation_summary = ?
+            WHERE id = ?
+        ''', (summary, conversation_id))
+        self.conn.commit()
+        # END update conversation summary
+        ###################################################
 
     def update_conversation(self, conversation_id: int, conversation: list) -> None:
         """
@@ -89,6 +114,31 @@ class RagSqliteDB:
         # END update conversation row
         ###################################################
 
+    def get_conversation_record(self, conversation_id: int) -> Optional[Dict]:
+        """
+        Load the conversation record for a given conversation ID.
+        Returns a dictionary with all conversation fields, or None if not found.
+        """
+        c = self.conn.cursor()
+        # START query conversation record by id
+        row = c.execute('''
+            SELECT id, username, conversation, conversation_summary, start_datetime, last_modified_datetime, deleted
+            FROM conversations WHERE id = ?
+        ''', (conversation_id,)).fetchone()
+        # END query conversation record by id
+        ###################################################
+        if row:
+            return {
+                'id': row[0],
+                'username': row[1],
+                'conversation': json.loads(row[2]),
+                'conversation_summary': row[3],
+                'start_datetime': row[4],
+                'last_modified_datetime': row[5],
+                'deleted': bool(row[6])
+            }
+        return None
+
     def get_conversations_for_user(self, username: str) -> dict:
         """
         Load all conversations for a user.
@@ -96,10 +146,11 @@ class RagSqliteDB:
         """
         c = self.conn.cursor()
         # START query conversations for user
+        # only return non-deleted conversations
         rows = c.execute('''
             SELECT id, conversation_summary, last_modified_datetime
             FROM conversations
-            WHERE username = ?
+            WHERE username = ? AND deleted = 0
         ''', (username,)).fetchall()
         # END query conversations for user
         ###################################################
@@ -195,6 +246,20 @@ class RagSqliteDB:
     def close(self):
         self.conn.close()
 
+    def soft_delete_conversation(self, conversation_id: int) -> None:
+        """Mark a conversation row as deleted (soft-delete) by setting deleted=1
+        and updating the last_modified_datetime.
+        """
+        import datetime
+        c = self.conn.cursor()
+        now = datetime.datetime.now().isoformat()
+        c.execute('''
+            UPDATE conversations
+            SET deleted = 1, last_modified_datetime = ?
+            WHERE id = ?
+        ''', (now, conversation_id))
+        self.conn.commit()
+
     def get_file_last_modified(self, source_file: str) -> Optional[float]:
         """Return the last_modified timestamp for a source_file recorded in file_metadata, or None."""
         c = self.conn.cursor()
@@ -255,6 +320,7 @@ class RagSqliteDB:
         """Build a nearest-neighbor index from embeddings in the DB.
         Fills self.tree with a cKDTree instance.
         Also fills self.modelled_chunk_idxs with indices of chunks that have valid embeddings.
+        Note: this should be moved to a different module.
         """
         # Load the chunks from the DB
         self._load_chunks()

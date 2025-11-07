@@ -1,0 +1,37 @@
+GET https://api.example.com/users/1
+Accept: application/json
+
+###
+GET http://127.0.0.1:5000/conversations?username=blah
+Accept: application/json
+
+###
+POST http://127.0.0.1:5000/conversations/new
+Content-Type: application/json
+Accept: application/json
+
+{
+  "username": "blah"
+}
+
+###
+GET http://127.0.0.1:5000/conversations/1
+Accept: application/json
+
+###
+POST http://127.0.0.1:5000/conversations/1/update
+Content-Type: application/json
+Accept: application/json
+
+{
+  "prompt": "Hello, how are you?"
+}
+
+###
+POST http://127.0.0.1:5000/conversations/1/update
+Content-Type: application/json
+Accept: application/json
+
+{
+  "prompt": "Tell me about the WLP"
+}

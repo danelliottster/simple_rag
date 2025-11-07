@@ -25,5 +25,6 @@ CREATE TABLE IF NOT EXISTS conversations (
     conversation TEXT, -- JSON string of conversation history
     conversation_summary TEXT,
     start_datetime TEXT, -- ISO format
-    last_modified_datetime TEXT -- ISO format
+    last_modified_datetime TEXT, -- ISO format
+    deleted BOOLEAN DEFAULT 0 NOT NULL CHECK (deleted IN (0, 1)) -- Soft delete flag
 );
