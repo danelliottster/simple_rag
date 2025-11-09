@@ -55,6 +55,16 @@ def get_db(cfg):
         raise RuntimeError('db_path not configured')
     return RagSqliteDB(db_path=db_path)
 
+def read_api_key(cfg):
+    api_key_file = cfg.get('api_key_file')
+    if not api_key_file or not os.path.exists(api_key_file):
+        return jsonify({"error": "api_key_file missing or not configured"}), 500
+    try:
+        with open(api_key_file, 'r') as f:
+            api_key = f.read().strip()
+    except Exception as e:
+        return jsonify({"error": f"failed to read api_key_file: {e}"}), 500
+    return api_key
 
 @app.route('/conversations/new', methods=['POST'])
 def new_conversation():
@@ -89,7 +99,7 @@ def get_conversation(conv_id: int):
     return jsonify({"conversation_id": conv_id, "conversation": conv})
 
 
-@app.route('/conversations/<int:conv_id>/delete', methods=['POST'])
+@app.route('/conversations/<int:conv_id>/delete', methods=['GET'])
 def delete_conversation(conv_id: int):
     """Soft-delete: clear conversation contents but keep the row (use update_conversation with empty list)."""
     cfg = config.get_config()
@@ -110,6 +120,7 @@ def update_conversation(conv_id: int):
 
     JSON body: {"prompt": "..."}
     """
+    
     data = request.get_json(force=True) or {}
     prompt = data.get('prompt')
     if prompt is None:
@@ -117,63 +128,71 @@ def update_conversation(conv_id: int):
 
     cfg = config.get_config()
     db = get_db(cfg)
+    provider = GoogleProvider(api_key=api_key)
+    model_light = GoogleModel(cfg.get('llm_model', 'gemini-2.5-flash'), provider=provider)
+    api_key = read_api_key(cfg)
+
+    ############################################################################
+    # START load the conversation and add the latest user prompt
 
     # Load conversation (respecting soft-delete behavior)
     conv = db.load_conversation(conv_id)
     if conv is None:
         return jsonify({"error": "conversation not found"}), 404
-    
-    conv_record = db.get_conversation_record(conv_id)
-    if conv_record is None:
-        return jsonify({"error": "conversation record not found"}), 404
-    summary = conv_record.get('summary')
 
     # Append the user's prompt to conversation history
     conv.append({"role": "user", "content": prompt})
 
-    # Build user-only prompt history for embedding (same as run_rag)
-    user_prompt_history = ""
-    for msg in conv:
-        if msg.get('role') == 'user':
-            user_prompt_history += f"{msg.get('content')}\n"
+    # END load the conversation and add the latest user prompt
+    ############################################################################
 
-    # Initialize LLM and embedding client from config
-    api_key_file = cfg.get('api_key_file')
-    if not api_key_file or not os.path.exists(api_key_file):
-        return jsonify({"error": "api_key_file missing or not configured"}), 500
-    try:
-        with open(api_key_file, 'r') as f:
-            api_key = f.read().strip()
-    except Exception as e:
-        return jsonify({"error": f"failed to read api_key_file: {e}"}), 500
+    ############################################################################
+    # START embed conversation
 
     client = genai.Client(api_key=api_key)
-    provider = GoogleProvider(api_key=api_key)
-    model_light = GoogleModel(cfg.get('llm_model', 'gemini-2.5-flash'), provider=provider)
+    prompt_embedding = embed_chunks.embed_conversation(conv, client, user_only=True)
 
-    # Embed the prompt and search the vector DB for relevant chunks
-    try:
-        prompt_embedding = embed_chunks.batch_embed_chunks(
-            [{'chunk': user_prompt_history}],
-            client=client
-        )[0]['embedding']
-    except Exception as e:
-        return jsonify({"error": f"embedding failed: {e}"}), 500
+    # END embed converstation
+    ############################################################################
 
+    ############################################################################
+    # START grab the existing conversation summary
+    
+    conv_record = db.get_conversation_record(conv_id)
+    if conv_record is None:
+        return jsonify({"error": "conversation record not found"}), 404
+    summary = conv_record.get('conversation_summary')
+        
+    # END grab the existing conversation summary
+    ############################################################################
+
+    ############################################################################
+    # START vector search for relevant chunks
+    
     tags = cfg.get('tags', []) or []
     top_k = cfg.get('max_context_documents', 20)
     try:
         relevant_chunks = db.search_chunks(embedding=prompt_embedding, top_k=top_k, tags=tags)
     except Exception as e:
         return jsonify({"error": f"vector search failed: {e}"}), 500
+    
+    # END vector search for relevant chunks
+    ############################################################################
 
-    # Build a context string for the LLM
+    ############################################################################
+    # START build context string for LLM
+    
     try:
         context = llm.build_context(chunks=relevant_chunks or [], max_tokens=cfg.get('max_context_tokens', 20000))
     except Exception as e:
-        context = ""
+        context = ""    
+    
+    # END build context string for LLM
+    ############################################################################
 
-    # Build the full prompt (include both user and llm messages)
+    ############################################################################
+    # START build the full prompt
+        
     full_prompt = ""
     for msg in conv:
         if msg.get('role') == 'user':
@@ -181,7 +200,12 @@ def update_conversation(conv_id: int):
         else:
             full_prompt += f"LLM: {msg.get('content')}\n"
 
-    # Send to LLM
+    # END build the full prompt
+    ############################################################################
+
+    ############################################################################
+    # START send to LLM
+    
     try:
         instructions = cfg.get('instructions', '')
         response = llm.send_to_llm(prompt=full_prompt, context=context, instructions=instructions, model=model_light)
@@ -194,53 +218,26 @@ def update_conversation(conv_id: int):
         db.update_conversation(conv_id, conv)
     except Exception as e:
         logger.error(f"failed to save conversation {conv_id}: {e}") 
-        return jsonify({"error": f"failed to save conversation: {e}"}), 500
+        return jsonify({"error": f"failed to save conversation: {e}"}), 500    
     
-    # update the summary
+    # END send to LLM
+    ############################################################################
+    
+    ############################################################################
+    # START optionally update the conversation summary
+    
     if not summary:
         # extract the first user prompt from the conversation and assign to summary
         summary = next((m.get('content') for m in conv if m.get('role') == 'user'), None)
         if summary and len(summary) > 50:
             summary = summary[:50]
         db.update_summary(conv_id, summary)
+        
+    # END optionally update the conversation summary
+    ############################################################################
 
     return jsonify({"conversation_id": conv_id, "conversation": conv})
 
-
-# @app.route('/conversations/save', methods=['POST'])
-# def save_conversation():
-#     """Save a conversation to the DB. Accepts either an existing conversation_id to update
-#     or a username to create a new conversation and save content.
-
-#     JSON body options:
-#       - {"conversation_id": 1, "conversation": [...]}  -> updates existing
-#       - {"username": "alice", "conversation": [...]} -> creates and saves
-#     Returns: {"conversation_id": id}
-#     """
-#     data = request.get_json(force=True) or {}
-#     conv = data.get('conversation')
-#     if conv is None:
-#         return jsonify({"error": "conversation (list) required in body"}), 400
-
-#     cfg = config.get_config()
-#     db = get_db(cfg)
-
-#     conv_id = data.get('conversation_id')
-#     if conv_id:
-#         # ensure exists
-#         _existing = db.load_conversation(conv_id)
-#         if _existing is None:
-#             return jsonify({"error": "conversation_id not found"}), 404
-#         db.update_conversation(conv_id, conv)
-#         return jsonify({"conversation_id": conv_id})
-
-#     username = data.get('username')
-#     if not username:
-#         return jsonify({"error": "either conversation_id or username required"}), 400
-#     # create and update
-#     new_id = db.create_conversation(username)
-#     db.update_conversation(new_id, conv)
-#     return jsonify({"conversation_id": new_id}), 201
 
 if __name__ == '__main__':
     app.run(host=args.host, port=args.port)

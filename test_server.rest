@@ -28,10 +28,14 @@ Accept: application/json
 }
 
 ###
-POST http://127.0.0.1:5000/conversations/1/update
+POST http://127.0.0.1:5000/conversations/2/update
 Content-Type: application/json
 Accept: application/json
 
 {
   "prompt": "Tell me about the WLP"
 }
+
+###
+GET http://127.0.0.1:5000/conversations/1/delete
+Accept: application/json

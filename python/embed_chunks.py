@@ -12,6 +12,8 @@ import argparse
 import json
 import pickle
 import time
+from typing import List, Tuple, Dict, Optional
+import numpy as np
 from google import genai
 from google.genai import types
 import logging
@@ -41,6 +43,24 @@ def batch_embed_chunks(chunks, client):
         embeddings.append(out)
     return embeddings
 
+def embed_conversation(conversation: List[Dict], client, user_only: bool) -> np.ndarray:
+    """
+    Embed the entire conversation history into a single embedding vector.
+    Args:
+        conversation: List of message dicts with 'role' and 'content'.
+        client: GenAI client initialized with API key.
+        user_only: If True, only embed user messages.
+    Returns:
+        A numpy array representing the conversation embedding.
+    """
+
+    # concatenate all messages into a single string
+    if user_only:
+        full_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation if msg['role'] == 'user'])
+    else:
+        full_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation])
+
+    return batch_embed_chunks([{'chunk': full_text}], client=client)[0]['embedding']
 
 def main():
     parser = argparse.ArgumentParser(description="Batch embed RAG chunks using Google GenAI SDK.")

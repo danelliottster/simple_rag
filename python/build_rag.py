@@ -172,7 +172,9 @@ def main():
     db.build_nn_index()
     # extract directory from the provided DB path, ensure it exists, and use it as model_path
     db_dir = Path(args.db_path).resolve().parent
-    model_path = str(db_dir) + os.sep + "model.pkl"
+    # remove the extension and add _model.pkl for the model file
+    model_filename = Path(args.db_path).stem + "_model.pkl"
+    model_path = str(db_dir) + os.sep + model_filename
     logger.info(f"Saving model to path based on DB location: {model_path}")
     db.save_index(model_path)
     # END create the vector search model
