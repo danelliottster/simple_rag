@@ -1,18 +1,41 @@
 """
-Simple Flask API wrapping conversation methods from RagSqliteDB.
+Flask API wrapping conversation methods from RagSqliteDB.
 
-Endpoints:
- - POST /conversations/new             {"username": "alice"} -> {"conversation_id": 1}
- - GET  /conversations/<id>           -> {"conversation": [...]}
- - GET  /conversations?username=...   -> list of conversations for user
- - POST /conversations/<id>/delete    soft-delete (clears conversation)
- - POST /conversations/<id>/append    {"system_output": "..."} -> appends an LLM message
- - POST /conversations/save           {"conversation_id": optional, "username": optional, "conversation": [...]} -> saves conversation
+Endpoints implemented in this module:
+ - POST   /conversations/new
+            Body: {"username": "<username>"}
+            Response: {"conversation_id": <id>} (201)
+            Creates a new conversation for the given user.
 
-This module uses existing methods on RagSqliteDB: create_conversation, load_conversation,
-update_conversation, get_conversations_for_user.
+ - GET    /conversations
+            Query: ?username=<username>
+            Response: {"conversations": [...]} (200)
+            Lists conversations for the given user.
+
+ - GET    /conversations/<id>
+            Response: {"conversation_id": <id>, "conversation": [...]} (200)
+            Loads a single conversation by id.
+
+ - POST    /conversations/<id>/delete
+            Response: {"conversation_id": <id>, "deleted": True} (200)
+            Soft-deletes a conversation (sets deleted flag / clears contents depending on DB impl).
+
+ - POST   /conversations/<id>/update
+            Body: {"prompt": "<user prompt>"}
+            Response: {"conversation_id": <id>, "conversation": [...]} (200)
+            Embeds the prompt, retrieves relevant context, calls the LLM, appends the LLM response
+            to the conversation, persists changes, and may update a brief conversation summary.
+
+Notes:
+ - This module relies on RagSqliteDB methods such as create_conversation, load_conversation,
+   update_conversation, get_conversations_for_user, soft_delete_conversation, get_conversation_record,
+   search_chunks, and update_summary.
+ - LLM/embedding clients and model selection are configured via the project's config and
+   the stored api_key file.
 """
 from flask import Flask, request, jsonify
+from flask_cors import CORS
+from functools import wraps
 import argparse
 import os
 import logging
@@ -30,10 +53,11 @@ import llm
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=str, default=None, help='Path to config YAML file')
-parser.add_argument('--host', type=str, default='127.0.0.1')
+parser.add_argument('--host', type=str, default='0.0.0.0')
 parser.add_argument('--port', type=int, default=5000)
 args = parser.parse_args()
 # init singleton config
@@ -66,7 +90,49 @@ def read_api_key(cfg):
         return jsonify({"error": f"failed to read api_key_file: {e}"}), 500
     return api_key
 
+
+def require_api_token(func):
+    """Decorator to require api_token configured in config for each endpoint.
+
+    The expected token is read from config key 'api_token'. Incoming token is accepted
+    from (in order): Authorization: Bearer <token>, X-API-Token header, query param
+    'api_token', or JSON body field 'api_token'. If the configured token is missing,
+    a 500 is returned. If the token is missing/invalid, a 401 is returned.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        cfg = config.get_config()
+        expected = cfg.get('api_token')
+        if not expected:
+            return jsonify({"error": "api_token not configured"}), 500
+
+        token = None
+        # Authorization: Bearer <token>
+        auth = request.headers.get('Authorization')
+        if auth and auth.startswith('Bearer '):
+            token = auth.split(' ', 1)[1].strip()
+
+        # X-API-Token header or query param
+        if not token:
+            token = request.headers.get('X-API-Token') or request.args.get('api_token')
+
+        # JSON body
+        if not token:
+            try:
+                body = request.get_json(silent=True) or {}
+                token = body.get('api_token')
+            except Exception:
+                token = None
+
+        if token != expected:
+            return jsonify({"error": "invalid or missing api_token"}), 401
+
+        return func(*args, **kwargs)
+
+    return wrapper
+
 @app.route('/conversations/new', methods=['POST'])
+@require_api_token
 def new_conversation():
     data = request.get_json(force=True) or {}
     username = data.get('username')
@@ -79,6 +145,7 @@ def new_conversation():
 
 
 @app.route('/conversations', methods=['GET'])
+@require_api_token
 def list_conversations():
     username = request.args.get('username')
     if not username:
@@ -90,6 +157,7 @@ def list_conversations():
 
 
 @app.route('/conversations/<int:conv_id>', methods=['GET'])
+@require_api_token
 def get_conversation(conv_id: int):
     cfg = config.get_config()
     db = get_db(cfg)
@@ -99,7 +167,8 @@ def get_conversation(conv_id: int):
     return jsonify({"conversation_id": conv_id, "conversation": conv})
 
 
-@app.route('/conversations/<int:conv_id>/delete', methods=['GET'])
+@app.route('/conversations/<int:conv_id>/delete', methods=['POST'])
+@require_api_token
 def delete_conversation(conv_id: int):
     """Soft-delete: clear conversation contents but keep the row (use update_conversation with empty list)."""
     cfg = config.get_config()
@@ -114,13 +183,16 @@ def delete_conversation(conv_id: int):
 
 
 @app.route('/conversations/<int:conv_id>/update', methods=['POST'])
+@require_api_token
 def update_conversation(conv_id: int):
     """Handle a user prompt: embed the prompt, retrieve context, send to LLM,
     append the LLM response to the conversation, save it, and return the updated conversation.
 
     JSON body: {"prompt": "..."}
     """
-    
+    cfg = config.get_config()
+    api_key = read_api_key(cfg)
+
     data = request.get_json(force=True) or {}
     prompt = data.get('prompt')
     if prompt is None:
