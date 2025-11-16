@@ -71,7 +71,7 @@ rag_db = rag_sqlite.RagSqliteDB(db_path=cfg.get('db_path'))
 # get the path to the db directory
 db_dir = os.path.dirname(rag_db.db_path)
 # load the "vector DB"
-rag_db.load_index_file(db_dir+"/model.pkl")
+rag_db.load_index_file(cfg.get('model_pkl_name'))
 
 def get_db(cfg):
     db_path = cfg.get('db_path')
@@ -199,7 +199,9 @@ def update_conversation(conv_id: int):
         return jsonify({"error": "prompt required"}), 400
 
     cfg = config.get_config()
-    db = get_db(cfg)
+    # db = get_db(cfg)
+    # db.load_index_file(cfg.get('model_pkl_name'))
+    db = rag_db  # use the global singleton db instance
     provider = GoogleProvider(api_key=api_key)
     model_light = GoogleModel(cfg.get('llm_model', 'gemini-2.5-flash'), provider=provider)
     api_key = read_api_key(cfg)

@@ -2,7 +2,7 @@
 rag_sqlite.py
 Module for storing and retrieving RAG chunks and embeddings using sqlite3 and sqlite-vec extension.
 """
-import sqlite3, pickle, os, json, logging
+import sqlite3, pickle, os, json, logging, datetime
 from typing import List, Tuple, Dict, Optional
 import numpy as np
 from scipy.spatial import cKDTree
@@ -20,31 +20,33 @@ class RagSqliteDB:
         as pickled blobs in the chunks table and can be handled later.
         """
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
         self.tree = None  # placeholder for nearest neighbor tree
         self.chunks = []  # placeholder for loaded chunks
         self.modelled_chunk_idxs = []  # placeholder for chunks with valid embeddings
+
+    def _get_conn(self):
+        return sqlite3.connect(self.db_path)
 
     def create_conversation(self, username: str) -> int:
         """
         Create a new conversation for the given username with empty conversation history and summary.
         Returns the new conversation's id.
         """
-        import datetime
-        c = self.conn.cursor()
-        # START create empty conversation JSON and timestamps
-        empty_conversation = json.dumps([])
-        now = datetime.datetime.now().isoformat()
-        # END create empty conversation JSON and timestamps
-        ###################################################
-        # START insert new conversation row
-        c.execute('''
-            INSERT INTO conversations (username, conversation, conversation_summary, start_datetime, last_modified_datetime)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (username, empty_conversation, '', now, now))
-        self.conn.commit()
-        # END insert new conversation row
-        ###################################################
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            # START create empty conversation JSON and timestamps
+            empty_conversation = json.dumps([])
+            now = datetime.datetime.now().isoformat()
+            # END create empty conversation JSON and timestamps
+            ###################################################
+            # START insert new conversation row
+            c.execute('''
+                INSERT INTO conversations (username, conversation, conversation_summary, start_datetime, last_modified_datetime)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (username, empty_conversation, '', now, now))
+            conn.commit()
+            # END insert new conversation row
+            ###################################################
         return c.lastrowid
 
     def load_conversation(self, conversation_id: int) -> list:
@@ -52,14 +54,15 @@ class RagSqliteDB:
         Load the conversation history for a given conversation ID.
         Returns the conversation history as a list.
         """
-        c = self.conn.cursor()
-        # START query conversation history by id
-        # include deleted flag so we can respect soft-deletes
-        row = c.execute('''
-            SELECT conversation, deleted FROM conversations WHERE id = ?
-        ''', (conversation_id,)).fetchone()
-        # END query conversation history by id
-        ###################################################
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            # START query conversation history by id
+            # include deleted flag so we can respect soft-deletes
+            row = c.execute('''
+                SELECT conversation, deleted FROM conversations WHERE id = ?
+                ''', (conversation_id,)).fetchone()
+            # END query conversation history by id
+            ###################################################
         if row:
             conversation_json, deleted = row
             # respect soft-delete: return None when conversation is marked deleted
@@ -77,16 +80,18 @@ class RagSqliteDB:
         Returns:
             None
         """
-        c = self.conn.cursor()
-        # START update conversation summary
-        c.execute('''
-            UPDATE conversations
-            SET conversation_summary = ?
-            WHERE id = ?
-        ''', (summary, conversation_id))
-        self.conn.commit()
-        # END update conversation summary
-        ###################################################
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            ###################################################
+            # START update conversation summary
+            c.execute('''
+                UPDATE conversations
+                SET conversation_summary = ?
+                WHERE id = ?
+            ''', (summary, conversation_id))
+            conn.commit()
+            # END update conversation summary
+            ###################################################
 
     def update_conversation(self, conversation_id: int, conversation: list) -> None:
         """
@@ -97,36 +102,37 @@ class RagSqliteDB:
         Returns:
             None
         """
-        import datetime
-        c = self.conn.cursor()
-        # START serialize conversation and get current time
-        conversation_json = json.dumps(conversation)
-        now = datetime.datetime.now().isoformat()
-        # END serialize conversation and get current time
-        ###################################################
-        # START update conversation row (do not update summary)
-        c.execute('''
-            UPDATE conversations
-            SET conversation = ?, last_modified_datetime = ?
-            WHERE id = ?
-        ''', (conversation_json, now, conversation_id))
-        self.conn.commit()
-        # END update conversation row
-        ###################################################
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            # START serialize conversation and get current time
+            conversation_json = json.dumps(conversation)
+            now = datetime.datetime.now().isoformat()
+            # END serialize conversation and get current time
+            ###################################################
+            # START update conversation row (do not update summary)
+            c.execute('''
+                UPDATE conversations
+                SET conversation = ?, last_modified_datetime = ?
+                WHERE id = ?
+            ''', (conversation_json, now, conversation_id))
+            conn.commit()
+            # END update conversation row
+            ###################################################
 
     def get_conversation_record(self, conversation_id: int) -> Optional[Dict]:
         """
         Load the conversation record for a given conversation ID.
         Returns a dictionary with all conversation fields, or None if not found.
         """
-        c = self.conn.cursor()
-        # START query conversation record by id
-        row = c.execute('''
-            SELECT id, username, conversation, conversation_summary, start_datetime, last_modified_datetime, deleted
-            FROM conversations WHERE id = ?
-        ''', (conversation_id,)).fetchone()
-        # END query conversation record by id
-        ###################################################
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            # START query conversation record by id
+            row = c.execute('''
+                SELECT id, username, conversation, conversation_summary, start_datetime, last_modified_datetime, deleted
+                FROM conversations WHERE id = ?
+            ''', (conversation_id,)).fetchone()
+            # END query conversation record by id
+            ###################################################
         if row:
             return {
                 'id': row[0],
@@ -144,15 +150,18 @@ class RagSqliteDB:
         Load all conversations for a user.
         Returns a JSON string with id, summary, and last modified date.
         """
-        c = self.conn.cursor()
-        # START query conversations for user
-        # only return non-deleted conversations
-        rows = c.execute('''
-            SELECT id, conversation_summary, last_modified_datetime
-            FROM conversations
-            WHERE username = ? AND deleted = 0
-        ''', (username,)).fetchall()
-        # END query conversations for user
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            ###################################################
+            # START query conversations for user
+            # only return non-deleted conversations
+            rows = c.execute('''
+                    SELECT id, conversation_summary, last_modified_datetime
+                    FROM conversations
+                    WHERE username = ? AND deleted = 0
+                    ''', (username,)).fetchall()
+            # END query conversations for user
+            ###################################################
         ###################################################
         # START build result list
         result = []
@@ -174,113 +183,114 @@ class RagSqliteDB:
         Returns:
             None
         """
-        c = self.conn.cursor()
-        
-        ############################################################################
-        # START get a list of unique files from the embedded chunks
-        unique_files = {}
-        for item in embedded_chunks:
-            md = item.get("metadata", {})
-            unique_files[md.get("source")] = md
-        # END get a list of unique files from the embedded chunks
-        ############################################################################
-        
-        ############################################################################
-        # START insert or update the table of file metadata
-        # track files we inserted/updated
-        # TODO: this code is inefficient
-        logger.info("Gathering file metadata for upsert...")
-        updated_files = set()
-        new_files = set()
-        for md in unique_files.values():
-            logger.debug(f"Processing chunk for file: {md['source']}")
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            
+            ############################################################################
+            # START get a list of unique files from the embedded chunks
+            unique_files = {}
+            for item in embedded_chunks:
+                md = item.get("metadata", {})
+                unique_files[md.get("source")] = md
+            # END get a list of unique files from the embedded chunks
+            ############################################################################
+            
+            ############################################################################
+            # START insert or update the table of file metadata
+            # track files we inserted/updated
+            # TODO: this code is inefficient
+            logger.info("Gathering file metadata for upsert...")
+            updated_files = set()
+            new_files = set()
+            for md in unique_files.values():
+                logger.debug(f"Processing chunk for file: {md['source']}")
 
-            # get file metadata
-            tags = md.get("tags", [])
-            tags_str = ','.join(tags) if tags else ''
+                # get file metadata
+                tags = md.get("tags", [])
+                tags_str = ','.join(tags) if tags else ''
 
-            # check if we already have this file and if the last_modified is newer than stored
-            existing_ts = self.get_file_last_modified(md.get("source")) # will be None if not found
-            if existing_ts is None or (md.get("modified_date") is not None and md.get("modified_date") > existing_ts):
-                if existing_ts is None:
-                    new_files.add(md.get("source"))
-                else:
-                    updated_files.add(md.get("source"))
-                c.execute('''INSERT INTO file_metadata (source_file, last_modified, summary, tags)
-                                VALUES (?, ?, ?, ?)
-                                ON CONFLICT(source_file) DO UPDATE SET last_modified=excluded.last_modified, summary=excluded.summary, tags=excluded.tags''',
-                            (md.get("source"), md.get("modified_date"), md.get("summary"), tags_str))
+                # check if we already have this file and if the last_modified is newer than stored
+                existing_ts = self.get_file_last_modified(md.get("source")) # will be None if not found
+                if existing_ts is None or (md.get("modified_date") is not None and md.get("modified_date") > existing_ts):
+                    if existing_ts is None:
+                        new_files.add(md.get("source"))
+                    else:
+                        updated_files.add(md.get("source"))
+                    c.execute('''INSERT INTO file_metadata (source_file, last_modified, summary, tags)
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(source_file) DO UPDATE SET last_modified=excluded.last_modified, summary=excluded.summary, tags=excluded.tags''',
+                                (md.get("source"), md.get("modified_date"), md.get("summary"), tags_str))
 
-        self.conn.commit()
-        # END insert or update the table of file metadata
-        ############################################################################
+            conn.commit()
+            # END insert or update the table of file metadata
+            ############################################################################
+            
+            ############################################################################
+            # START clear out existing chunks for updated files
+            for file in updated_files:
+                if file["last_modified"] is not None:
+                    db_last = self.get_file_last_modified(file["source_file"])
+                    if db_last is not None and file["last_modified"] > db_last:
+                        logger.info(f"Clearing out existing chunks for updated file: {file['source_file']}")
+                        self.delete_chunks_for_file(file["source_file"])
+            # END clear out existing chunks for updated files
+            ############################################################################
+            
+            ############################################################################
+            # START Iterate over embedded chunks and insert into DB
+            for chunk in embedded_chunks:
+                #check if chunk's source file is in new_files or updated_files, skip otherwise
+                if chunk["metadata"]["source"] not in new_files and chunk["metadata"]["source"] not in updated_files:
+                    continue
+                embedding = pickle.dumps(chunk['embedding'])
+                tags = chunk["metadata"]["tags"]
+                tags_str = ','.join(tags) if tags else ''
+                # Insert chunk
+                c.execute('''INSERT INTO chunks (source_file, chunk_index, chunk_text, embedding, tags)
+                            VALUES (?, ?, ?, ?, ?)''',
+                        (chunk["metadata"]["source"], chunk["metadata"]["chunk_index"], chunk["chunk"], embedding, tags_str))
+            conn.commit()
+            # END Iterate over embedded chunks and insert into DB
+            ############################################################################
         
-        ############################################################################
-        # START clear out existing chunks for updated files
-        for file in updated_files:
-            if file["last_modified"] is not None:
-                db_last = self.get_file_last_modified(file["source_file"])
-                if db_last is not None and file["last_modified"] > db_last:
-                    logger.info(f"Clearing out existing chunks for updated file: {file['source_file']}")
-                    self.delete_chunks_for_file(file["source_file"])
-        # END clear out existing chunks for updated files
-        ############################################################################
-        
-        ############################################################################
-        # START Iterate over embedded chunks and insert into DB
-        for chunk in embedded_chunks:
-            #check if chunk's source file is in new_files or updated_files, skip otherwise
-            if chunk["metadata"]["source"] not in new_files and chunk["metadata"]["source"] not in updated_files:
-                continue
-            embedding = pickle.dumps(chunk['embedding'])
-            tags = chunk["metadata"]["tags"]
-            tags_str = ','.join(tags) if tags else ''
-            # Insert chunk
-            c.execute('''INSERT INTO chunks (source_file, chunk_index, chunk_text, embedding, tags)
-                         VALUES (?, ?, ?, ?, ?)''',
-                      (chunk["metadata"]["source"], chunk["metadata"]["chunk_index"], chunk["chunk"], embedding, tags_str))
-        self.conn.commit()
-        # END Iterate over embedded chunks and insert into DB
-        ############################################################################
-        
-    def close(self):
-        self.conn.close()
-
     def soft_delete_conversation(self, conversation_id: int) -> None:
         """Mark a conversation row as deleted (soft-delete) by setting deleted=1
         and updating the last_modified_datetime.
         """
-        import datetime
-        c = self.conn.cursor()
-        now = datetime.datetime.now().isoformat()
-        c.execute('''
-            UPDATE conversations
-            SET deleted = 1, last_modified_datetime = ?
-            WHERE id = ?
-        ''', (now, conversation_id))
-        self.conn.commit()
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            now = datetime.datetime.now().isoformat()
+            c.execute('''
+                UPDATE conversations
+                SET deleted = 1, last_modified_datetime = ?
+                WHERE id = ?
+            ''', (now, conversation_id))
+            conn.commit()
 
     def get_file_last_modified(self, source_file: str) -> Optional[float]:
         """Return the last_modified timestamp for a source_file recorded in file_metadata, or None."""
-        c = self.conn.cursor()
-        row = c.execute('SELECT last_modified FROM file_metadata WHERE source_file = ?', (source_file,)).fetchone()
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            row = c.execute('SELECT last_modified FROM file_metadata WHERE source_file = ?', (source_file,)).fetchone()
         if row:
             return row[0]
         return None
 
     def get_all_source_files(self) -> set:
         """Return a set of unique source_file values stored in file_metadata."""
-        c = self.conn.cursor()
-        rows = c.execute('SELECT source_file FROM file_metadata').fetchall()
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            rows = c.execute('SELECT source_file FROM file_metadata').fetchall()
         return set(r[0] for r in rows if r and r[0] is not None)
 
     def delete_chunks_for_file(self, source_file: str) -> int:
         """Delete all chunk rows for the given source_file. Returns number of rows deleted."""
-        c = self.conn.cursor()
-        # delete from chunks table
-        res = c.execute('DELETE FROM chunks WHERE source_file = ?', (source_file,))
-        deleted = res.rowcount if hasattr(res, 'rowcount') else None
-        self.conn.commit()
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            # delete from chunks table
+            res = c.execute('DELETE FROM chunks WHERE source_file = ?', (source_file,))
+            deleted = res.rowcount if hasattr(res, 'rowcount') else None
+            conn.commit()
         return deleted
 
     def _load_chunks(self) -> List[Dict]:
@@ -291,9 +301,10 @@ class RagSqliteDB:
         Returns:
             A list of dicts with keys: id, source_file, chunk_index, tags
         """
-        c = self.conn.cursor()
-        sql = 'SELECT id, source_file, chunk_index, embedding, tags, chunk_text FROM chunks'
-        rows = c.execute(sql).fetchall()
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            sql = 'SELECT id, source_file, chunk_index, embedding, tags, chunk_text FROM chunks'
+            rows = c.execute(sql).fetchall()
         self.chunks = []
         for row in rows:
             _id, source_file, chunk_index, embedding_blob, tags, chunk_text = row

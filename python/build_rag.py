@@ -180,7 +180,5 @@ def main():
     # END create the vector search model
     ############################################################################
 
-    db.close()
-
 if __name__ == "__main__":
     main()
