@@ -40,14 +40,11 @@ import argparse
 import os
 import logging
 
-from rag_sqlite import RagSqliteDB
-import config
-
 # LLM and embedding imports
 from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
-import embed_chunks, rag_sqlite
+import embed_chunks, rag_sqlite, config
 import llm
 
 logger = logging.getLogger(__name__)
@@ -72,12 +69,6 @@ rag_db = rag_sqlite.RagSqliteDB(db_path=cfg.get('db_path'))
 db_dir = os.path.dirname(rag_db.db_path)
 # load the "vector DB"
 rag_db.load_index_file(cfg.get('model_pkl_name'))
-
-def get_db(cfg):
-    db_path = cfg.get('db_path')
-    if not db_path:
-        raise RuntimeError('db_path not configured')
-    return RagSqliteDB(db_path=db_path)
 
 def read_api_key(cfg):
     api_key_file = cfg.get('api_key_file')
@@ -138,9 +129,7 @@ def new_conversation():
     username = data.get('username')
     if not username:
         return jsonify({"error": "username required"}), 400
-    cfg = config.get_config()
-    db = get_db(cfg)
-    conv_id = db.create_conversation(username)
+    conv_id = rag_db.create_conversation(username)
     return jsonify({"conversation_id": conv_id}), 201
 
 
@@ -150,18 +139,14 @@ def list_conversations():
     username = request.args.get('username')
     if not username:
         return jsonify({"error": "username query parameter required"}), 400
-    cfg = config.get_config()
-    db = get_db(cfg)
-    result = db.get_conversations_for_user(username)
+    result = rag_db.get_conversations_for_user(username)
     return jsonify({"conversations": result})
 
 
 @app.route('/conversations/<int:conv_id>', methods=['GET'])
 @require_api_token
 def get_conversation(conv_id: int):
-    cfg = config.get_config()
-    db = get_db(cfg)
-    conv = db.load_conversation(conv_id)
+    conv = rag_db.load_conversation(conv_id)
     if conv is None:
         return jsonify({"error": "conversation not found"}), 404
     return jsonify({"conversation_id": conv_id, "conversation": conv})
@@ -171,14 +156,12 @@ def get_conversation(conv_id: int):
 @require_api_token
 def delete_conversation(conv_id: int):
     """Soft-delete: clear conversation contents but keep the row (use update_conversation with empty list)."""
-    cfg = config.get_config()
-    db = get_db(cfg)
     # load to check exists
-    conv = db.load_conversation(conv_id)
+    conv = rag_db.load_conversation(conv_id)
     if conv is None:
         return jsonify({"error": "conversation not found"}), 404
     # soft-delete by setting deleted flag on the conversation row
-    db.soft_delete_conversation(conv_id)
+    rag_db.soft_delete_conversation(conv_id)
     return jsonify({"conversation_id": conv_id, "deleted": True})
 
 
@@ -199,9 +182,6 @@ def update_conversation(conv_id: int):
         return jsonify({"error": "prompt required"}), 400
 
     cfg = config.get_config()
-    # db = get_db(cfg)
-    # db.load_index_file(cfg.get('model_pkl_name'))
-    db = rag_db  # use the global singleton db instance
     provider = GoogleProvider(api_key=api_key)
     model_light = GoogleModel(cfg.get('llm_model', 'gemini-2.5-flash'), provider=provider)
     api_key = read_api_key(cfg)
@@ -210,7 +190,7 @@ def update_conversation(conv_id: int):
     # START load the conversation and add the latest user prompt
 
     # Load conversation (respecting soft-delete behavior)
-    conv = db.load_conversation(conv_id)
+    conv = rag_db.load_conversation(conv_id)
     if conv is None:
         return jsonify({"error": "conversation not found"}), 404
 
@@ -231,8 +211,8 @@ def update_conversation(conv_id: int):
 
     ############################################################################
     # START grab the existing conversation summary
-    
-    conv_record = db.get_conversation_record(conv_id)
+
+    conv_record = rag_db.get_conversation_record(conv_id)
     if conv_record is None:
         return jsonify({"error": "conversation record not found"}), 404
     summary = conv_record.get('conversation_summary')
@@ -246,7 +226,7 @@ def update_conversation(conv_id: int):
     tags = cfg.get('tags', []) or []
     top_k = cfg.get('max_context_documents', 20)
     try:
-        relevant_chunks = db.search_chunks(embedding=prompt_embedding, top_k=top_k, tags=tags)
+        relevant_chunks = rag_db.search_chunks(embedding=prompt_embedding, top_k=top_k, tags=tags)
     except Exception as e:
         return jsonify({"error": f"vector search failed: {e}"}), 500
     
@@ -289,7 +269,7 @@ def update_conversation(conv_id: int):
     # Append LLM response and persist
     conv.append({"role": "llm", "content": response})
     try:
-        db.update_conversation(conv_id, conv)
+        rag_db.update_conversation(conv_id, conv)
     except Exception as e:
         logger.error(f"failed to save conversation {conv_id}: {e}") 
         return jsonify({"error": f"failed to save conversation: {e}"}), 500    
@@ -305,8 +285,8 @@ def update_conversation(conv_id: int):
         summary = next((m.get('content') for m in conv if m.get('role') == 'user'), None)
         if summary and len(summary) > 50:
             summary = summary[:50]
-        db.update_summary(conv_id, summary)
-        
+        rag_db.update_summary(conv_id, summary)
+
     # END optionally update the conversation summary
     ############################################################################
 
