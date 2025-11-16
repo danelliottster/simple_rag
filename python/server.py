@@ -64,10 +64,8 @@ logging.basicConfig(level=logging.INFO)
 config.Config.instance(args.config)
 cfg = config.get_config()
 
-rag_db = rag_sqlite.RagSqliteDB(db_path=cfg.get('db_path'))
-# get the path to the db directory
-db_dir = os.path.dirname(rag_db.db_path)
 # load the "vector DB"
+rag_db = rag_sqlite.RagSqliteDB(db_path=cfg.get('db_path'))
 rag_db.load_index_file(cfg.get('model_pkl_name'))
 
 def read_api_key(cfg):
