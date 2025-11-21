@@ -1,5 +1,5 @@
 """
-Flask API wrapping conversation methods from RagSqliteDB.
+FastAPI API wrapping conversation methods from RagSqliteDB.
 
 Endpoints implemented in this module:
  - POST   /conversations/new
@@ -33,9 +33,11 @@ Notes:
  - LLM/embedding clients and model selection are configured via the project's config and
    the stored api_key file.
 """
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from functools import wraps
+from fastapi import FastAPI, HTTPException, Depends, Query, Path, Header
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
 import argparse
 import os
 import logging
@@ -49,8 +51,44 @@ import llm
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app)
+# Pydantic models
+class NewConversationRequest(BaseModel):
+    username: str
+
+class NewConversationResponse(BaseModel):
+    conversation_id: int
+
+class ListConversationsResponse(BaseModel):
+    conversations: List[Dict[str, Any]]
+
+class GetConversationResponse(BaseModel):
+    conversation_id: int
+    conversation: List[Dict[str, Any]]
+
+class DeleteConversationResponse(BaseModel):
+    conversation_id: int
+    deleted: bool
+
+class UpdateConversationRequest(BaseModel):
+    prompt: str
+
+class UpdateConversationResponse(BaseModel):
+    conversation_id: int
+    conversation: List[Dict[str, Any]]
+
+class ErrorResponse(BaseModel):
+    error: str
+
+app = FastAPI(title="RAG Conversation API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=str, default=None, help='Path to config YAML file')
@@ -71,101 +109,96 @@ rag_db.load_index_file(cfg.get('model_pkl_name'))
 def read_api_key(cfg):
     api_key_file = cfg.get('api_key_file')
     if not api_key_file or not os.path.exists(api_key_file):
-        return jsonify({"error": "api_key_file missing or not configured"}), 500
+        raise HTTPException(status_code=500, detail="api_key_file missing or not configured")
     try:
         with open(api_key_file, 'r') as f:
             api_key = f.read().strip()
     except Exception as e:
-        return jsonify({"error": f"failed to read api_key_file: {e}"}), 500
+        raise HTTPException(status_code=500, detail=f"failed to read api_key_file: {e}")
     return api_key
 
 
-def require_api_token(func):
-    """Decorator to require api_token configured in config for each endpoint.
+def verify_api_token(
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_api_token: Optional[str] = Header(None, alias="X-API-Token"),
+    api_token: Optional[str] = Query(None, alias="api_token")
+) -> str:
+    """Dependency to verify API token from various sources.
 
     The expected token is read from config key 'api_token'. Incoming token is accepted
     from (in order): Authorization: Bearer <token>, X-API-Token header, query param
-    'api_token', or JSON body field 'api_token'. If the configured token is missing,
+    'api_token'. If the configured token is missing,
     a 500 is returned. If the token is missing/invalid, a 401 is returned.
     """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        cfg = config.get_config()
-        expected = cfg.get('api_token')
-        if not expected:
-            return jsonify({"error": "api_token not configured"}), 500
+    cfg = config.get_config()
+    expected = cfg.get('api_token')
+    if not expected:
+        raise HTTPException(status_code=500, detail="api_token not configured")
 
-        token = None
-        # Authorization: Bearer <token>
-        auth = request.headers.get('Authorization')
-        if auth and auth.startswith('Bearer '):
-            token = auth.split(' ', 1)[1].strip()
+    token = None
+    # Authorization: Bearer <token>
+    if authorization and authorization.startswith('Bearer '):
+        token = authorization.split(' ', 1)[1].strip()
 
-        # X-API-Token header or query param
-        if not token:
-            token = request.headers.get('X-API-Token') or request.args.get('api_token')
+    # X-API-Token header or query param
+    if not token:
+        token = x_api_token or api_token
 
-        # JSON body
-        if not token:
-            try:
-                body = request.get_json(silent=True) or {}
-                token = body.get('api_token')
-            except Exception:
-                token = None
+    if not token or token != expected:
+        raise HTTPException(status_code=401, detail="invalid or missing api_token")
 
-        if token != expected:
-            return jsonify({"error": "invalid or missing api_token"}), 401
+    return token
 
-        return func(*args, **kwargs)
-
-    return wrapper
-
-@app.route('/conversations/new', methods=['POST'])
-@require_api_token
-def new_conversation():
-    data = request.get_json(force=True) or {}
-    username = data.get('username')
-    if not username:
-        return jsonify({"error": "username required"}), 400
-    conv_id = rag_db.create_conversation(username)
-    return jsonify({"conversation_id": conv_id}), 201
+@app.post('/conversations/new', response_model=NewConversationResponse, status_code=201)
+def new_conversation(
+    request: NewConversationRequest,
+    token: str = Depends(verify_api_token)
+):
+    conv_id = rag_db.create_conversation(request.username)
+    return NewConversationResponse(conversation_id=conv_id)
 
 
-@app.route('/conversations', methods=['GET'])
-@require_api_token
-def list_conversations():
-    username = request.args.get('username')
-    if not username:
-        return jsonify({"error": "username query parameter required"}), 400
+@app.get('/conversations', response_model=ListConversationsResponse)
+def list_conversations(
+    username: str = Query(..., description="Username to filter conversations"),
+    token: str = Depends(verify_api_token)
+):
     result = rag_db.get_conversations_for_user(username)
-    return jsonify({"conversations": result})
+    return ListConversationsResponse(conversations=result)
 
 
-@app.route('/conversations/<int:conv_id>', methods=['GET'])
-@require_api_token
-def get_conversation(conv_id: int):
+@app.get('/conversations/{conv_id}', response_model=GetConversationResponse)
+def get_conversation(
+    conv_id: int = Path(..., description="Conversation ID"),
+    token: str = Depends(verify_api_token)
+):
     conv = rag_db.load_conversation(conv_id)
     if conv is None:
-        return jsonify({"error": "conversation not found"}), 404
-    return jsonify({"conversation_id": conv_id, "conversation": conv})
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return GetConversationResponse(conversation_id=conv_id, conversation=conv)
 
 
-@app.route('/conversations/<int:conv_id>/delete', methods=['POST'])
-@require_api_token
-def delete_conversation(conv_id: int):
+@app.post('/conversations/{conv_id}/delete', response_model=DeleteConversationResponse)
+def delete_conversation(
+    conv_id: int = Path(..., description="Conversation ID"),
+    token: str = Depends(verify_api_token)
+):
     """Soft-delete: clear conversation contents but keep the row (use update_conversation with empty list)."""
     # load to check exists
     conv = rag_db.load_conversation(conv_id)
     if conv is None:
-        return jsonify({"error": "conversation not found"}), 404
+        raise HTTPException(status_code=404, detail="conversation not found")
     # soft-delete by setting deleted flag on the conversation row
     rag_db.soft_delete_conversation(conv_id)
-    return jsonify({"conversation_id": conv_id, "deleted": True})
+    return DeleteConversationResponse(conversation_id=conv_id, deleted=True)
 
 
-@app.route('/conversations/<int:conv_id>/update', methods=['POST'])
-@require_api_token
-def update_conversation(conv_id: int):
+@app.post('/conversations/{conv_id}/update', response_model=UpdateConversationResponse)
+def update_conversation(
+    request: UpdateConversationRequest,
+    conv_id: int = Path(..., description="Conversation ID"),
+    token: str = Depends(verify_api_token)
+):
     """Handle a user prompt: embed the prompt, retrieve context, send to LLM,
     append the LLM response to the conversation, save it, and return the updated conversation.
 
@@ -174,15 +207,8 @@ def update_conversation(conv_id: int):
     cfg = config.get_config()
     api_key = read_api_key(cfg)
 
-    data = request.get_json(force=True) or {}
-    prompt = data.get('prompt')
-    if prompt is None:
-        return jsonify({"error": "prompt required"}), 400
-
-    cfg = config.get_config()
     provider = GoogleProvider(api_key=api_key)
     model_light = GoogleModel(cfg.get('llm_model', 'gemini-2.5-flash'), provider=provider)
-    api_key = read_api_key(cfg)
 
     ############################################################################
     # START load the conversation and add the latest user prompt
@@ -190,10 +216,10 @@ def update_conversation(conv_id: int):
     # Load conversation (respecting soft-delete behavior)
     conv = rag_db.load_conversation(conv_id)
     if conv is None:
-        return jsonify({"error": "conversation not found"}), 404
+        raise HTTPException(status_code=404, detail="conversation not found")
 
     # Append the user's prompt to conversation history
-    conv.append({"role": "user", "content": prompt})
+    conv.append({"role": "user", "content": request.prompt})
 
     # END load the conversation and add the latest user prompt
     ############################################################################
@@ -212,7 +238,7 @@ def update_conversation(conv_id: int):
 
     conv_record = rag_db.get_conversation_record(conv_id)
     if conv_record is None:
-        return jsonify({"error": "conversation record not found"}), 404
+        raise HTTPException(status_code=404, detail="conversation record not found")
     summary = conv_record.get('conversation_summary')
         
     # END grab the existing conversation summary
@@ -226,7 +252,7 @@ def update_conversation(conv_id: int):
     try:
         relevant_chunks = rag_db.search_chunks(embedding=prompt_embedding, top_k=top_k, tags=tags)
     except Exception as e:
-        return jsonify({"error": f"vector search failed: {e}"}), 500
+        raise HTTPException(status_code=500, detail=f"vector search failed: {e}")
     
     # END vector search for relevant chunks
     ############################################################################
@@ -254,6 +280,7 @@ def update_conversation(conv_id: int):
 
     # END build the full prompt
     ############################################################################
+    
 
     ############################################################################
     # START send to LLM
@@ -262,7 +289,7 @@ def update_conversation(conv_id: int):
         instructions = cfg.get('instructions', '')
         response = llm.send_to_llm(prompt=full_prompt, context=context, instructions=instructions, model=model_light)
     except Exception as e:
-        return jsonify({"error": f"LLM call failed: {e}"}), 500
+        raise HTTPException(status_code=500, detail=f"LLM call failed: {e}")
 
     # Append LLM response and persist
     conv.append({"role": "llm", "content": response})
@@ -270,7 +297,7 @@ def update_conversation(conv_id: int):
         rag_db.update_conversation(conv_id, conv)
     except Exception as e:
         logger.error(f"failed to save conversation {conv_id}: {e}") 
-        return jsonify({"error": f"failed to save conversation: {e}"}), 500    
+        raise HTTPException(status_code=500, detail=f"failed to save conversation: {e}")
     
     # END send to LLM
     ############################################################################
@@ -288,8 +315,9 @@ def update_conversation(conv_id: int):
     # END optionally update the conversation summary
     ############################################################################
 
-    return jsonify({"conversation_id": conv_id, "conversation": conv})
+    return UpdateConversationResponse(conversation_id=conv_id, conversation=conv)
 
 
 if __name__ == '__main__':
-    app.run(host=args.host, port=args.port)
+    import uvicorn
+    uvicorn.run(app, host=args.host, port=args.port)

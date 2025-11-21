@@ -1,41 +1,47 @@
-GET https://api.example.com/users/1
-Accept: application/json
+@port = 5001
+@token = c0a8e199-e60d-4a18-9b8f-1498b36e4f3a
 
 ###
-GET http://127.0.0.1:5000/conversations?username=blah
+GET http://127.0.0.1:{{port}}/conversations?username=blah
 Accept: application/json
+Authorization: Bearer {{token}}
 
 ###
-POST http://127.0.0.1:5000/conversations/new
+POST http://127.0.0.1:{{port}}/conversations/new
 Content-Type: application/json
 Accept: application/json
+Authorization: Bearer {{token}}
 
 {
   "username": "blah"
 }
 
 ###
-GET http://127.0.0.1:5000/conversations/1
+GET http://127.0.0.1:{{port}}/conversations/1
 Accept: application/json
+Authorization: Bearer {{token}}
 
 ###
-POST http://127.0.0.1:5000/conversations/1/update
+POST http://127.0.0.1:{{port}}/conversations/1/update
 Content-Type: application/json
 Accept: application/json
+Authorization: Bearer {{token}}
 
 {
   "prompt": "Hello, how are you?"
 }
 
 ###
-POST http://127.0.0.1:5000/conversations/2/update
+POST http://127.0.0.1:{{port}}/conversations/1/update
 Content-Type: application/json
 Accept: application/json
+Authorization: Bearer {{token}}
 
 {
   "prompt": "Tell me about the WLP"
 }
 
 ###
-GET http://127.0.0.1:5000/conversations/1/delete
+GET http://127.0.0.1:{{port}}/conversations/1/delete
 Accept: application/json
+Authorization: Bearer {{token}}
