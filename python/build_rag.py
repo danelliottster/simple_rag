@@ -1,5 +1,6 @@
 """
 Script to build the RAG database: parses all documents in a corpus directory, chunks them, and outputs a list of chunks ready for embedding.
+Note: there is no need to use a factory here since this is a standalone script designed to build a single RAG database instance.
 
 Usage:
     python build_rag_chunks.py --corpus_dir <path_to_corpus> --chunk_size <int> --chunk_overlap <int>

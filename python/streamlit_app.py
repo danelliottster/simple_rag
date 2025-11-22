@@ -4,7 +4,8 @@ Loads the database and vector index once, then allows interactive queries.
 """
 import streamlit as st
 import os
-import rag_sqlite, embed_chunks, llm, config
+import embed_chunks, llm, config
+from rag_sqlite_factory import get_rag_sqlite_db
 from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
@@ -55,7 +56,7 @@ if password_required and not st.session_state.authenticated:
 def load_resources(api_key_file, db_path):
     with open(api_key_file, 'r') as f:
         api_key = f.read().strip()
-    rag_db = rag_sqlite.RagSqliteDB(db_path=db_path)
+    rag_db = get_rag_sqlite_db(db_path)
     db_dir = os.path.dirname(db_path)
     rag_db.load_index_file(os.path.join(db_dir, "model.pkl"))
     client = genai.Client(api_key=api_key)

@@ -7,8 +7,6 @@ from typing import List, Tuple, Dict, Optional
 import numpy as np
 from scipy.spatial import cKDTree
 
-# Module-level logger: libraries should not configure logging. Add a NullHandler
-# to avoid "No handler" warnings when the package is used by other apps.
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 

@@ -1,5 +1,6 @@
 import os, argparse
-import rag_sqlite, embed_chunks, llm, config
+import embed_chunks, llm, config
+from rag_sqlite_factory import get_rag_sqlite_db
 from google import genai
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
@@ -22,7 +23,7 @@ api_key_file = cfg.get('api_key_file')
 db_path = cfg.get('db_path')
 tags = cfg.get('tags', []) or []
 
-rag_db = rag_sqlite.RagSqliteDB(db_path=db_path)
+rag_db = get_rag_sqlite_db(db_path)
 # get the path to the db directory
 db_dir = os.path.dirname(db_path)
 # load the "vector DB"
